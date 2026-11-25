@@ -1,0 +1,89 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>NOKIA LAN SNAKE</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <main class="device-shell">
+    <header class="lcd-header">
+      <h1 class="lcd-title">SNAKE // LAN</h1>
+      <div id="status-badge" class="status-pill">LOBBY</div>
+    </header>
+
+    <div id="connection-banner" class="banner banner-warn hidden" role="alert">
+      CONNECTION LOST — RETRYING...
+    </div>
+
+    <div id="error-banner" class="banner banner-error hidden" role="alert"></div>
+
+    <!-- Lobby View -->
+    <section id="lobby-panel" class="panel">
+      <form id="join-form" class="lobby-form">
+        <label for="player-name" class="field-label">PLAYER NAME</label>
+        <input
+          id="player-name"
+          name="name"
+          type="text"
+          maxlength="24"
+          placeholder="Enter callsign"
+          autocomplete="off"
+          required
+        >
+
+        <div id="num-players-group" class="field-group">
+          <label for="num-players" class="field-label">PLAYERS IN ROOM (1-4)</label>
+          <select id="num-players" name="num_players">
+            <option value="1">1 Player (Solo)</option>
+            <option value="2" selected>2 Players</option>
+            <option value="3">3 Players</option>
+            <option value="4">4 Players</option>
+          </select>
+        </div>
+
+        <button id="join-btn" type="submit" class="btn btn-primary">JOIN ROOM</button>
+      </form>
+
+      <div id="waiting-box" class="waiting-box hidden">
+        <p id="waiting-text" class="waiting-text">WAITING FOR PLAYERS 0/0</p>
+        <ul id="lobby-players" class="simple-list"></ul>
+      </div>
+    </section>
+
+    <!-- Active Game View -->
+    <section id="game-panel" class="panel hidden">
+      <div class="game-layout">
+        <div class="board-column">
+          <canvas id="game-canvas" width="600" height="400"></canvas>
+          <div class="controls-bar">
+            <div class="control-meta">
+              <span>SLOT: <strong id="your-slot">-</strong></span>
+              <span>TICK: <strong id="tick-counter">0</strong></span>
+            </div>
+            <div id="owned-keys-box" class="owned-keys-box"></div>
+          </div>
+        </div>
+
+        <aside class="sidebar-column">
+          <h2 class="section-heading">SCOREBOARD</h2>
+          <ul id="scoreboard-list" class="scoreboard-list"></ul>
+        </aside>
+      </div>
+    </section>
+
+    <!-- Game Over Overlay -->
+    <div id="gameover-overlay" class="overlay hidden" role="dialog" aria-modal="true">
+      <div class="overlay-card">
+        <h2 class="overlay-title">GAME OVER</h2>
+        <p id="winner-text" class="winner-text"></p>
+        <ul id="final-scores" class="simple-list"></ul>
+        <button id="reset-btn" type="button" class="btn btn-primary">RESET TO LOBBY</button>
+      </div>
+    </div>
+  </main>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>
