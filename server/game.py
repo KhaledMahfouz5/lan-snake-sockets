@@ -1,4 +1,4 @@
-"""Thread-safe game engine for LAN multiplayer Snake."""
+"""Thread-safe cooperative game engine for LAN multiplayer Snake."""
 
 from dataclasses import dataclass, field
 import random
@@ -7,6 +7,8 @@ import threading
 from typing import Any
 
 from server import config
+
+SHARED_SNAKE_ID = "coop-snake"
 
 
 class GameError(Exception):
@@ -46,14 +48,6 @@ CCW_TURN = {
     "RIGHT": "UP",
 }
 
-# Spawn tuples: (head_x, head_y, heading, initial_length)
-SPAWN_CONFIGS = {
-    1: [(15, 10, "RIGHT", 3)],
-    2: [(6, 10, "RIGHT", 3), (23, 10, "LEFT", 3)],
-    3: [(6, 6, "RIGHT", 3), (23, 6, "LEFT", 3), (15, 16, "UP", 3)],
-    4: [(6, 6, "RIGHT", 3), (23, 6, "LEFT", 3), (6, 14, "RIGHT", 3), (23, 14, "LEFT", 3)],
-}
-
 
 @dataclass
 class Player:
@@ -63,7 +57,6 @@ class Player:
     name: str
     alive: bool = True
     score: int = 0
-    pending_dir: str | None = None
 
 
 @dataclass
@@ -81,7 +74,9 @@ class RoomState:
     num_players: int | None = None
     tick: int = 0
     players_by_token: dict[str, Player] = field(default_factory=dict)
-    snakes_by_id: dict[str, Snake] = field(default_factory=dict)
+    shared_snake: Snake | None = None
+    pending_dir: str | None = None
+    last_steer_player_id: str | None = None
     food: list[tuple[int, int]] = field(default_factory=list)
     winner: str | None = None
 
@@ -98,26 +93,19 @@ _room_lock = threading.Lock()
 _room = RoomState()
 
 
-def _build_initial_snake(player_id: str, slot: int, num_players: int) -> Snake:
-    """Create a snake facing inward from a distinct spawn position."""
-    spawns = SPAWN_CONFIGS[num_players]
-    hx, hy, heading, length = spawns[slot - 1]
-    dx, dy = DIR_VECTORS[heading]
-    cells: list[tuple[int, int]] = []
-    for offset in range(length):
-        cx = hx - dx * offset
-        cy = hy - dy * offset
-        if 0 <= cx < config.GRID_WIDTH and 0 <= cy < config.GRID_HEIGHT:
-            cells.append((cx, cy))
-    return Snake(player_id=player_id, cells=cells, heading=heading, alive=True)
+def _build_shared_snake() -> Snake:
+    """Create the single cooperative snake near the center facing right."""
+    hx, hy = config.GRID_WIDTH // 2, config.GRID_HEIGHT // 2
+    length = 3
+    cells = [(hx - offset, hy) for offset in range(length) if hx - offset >= 0]
+    return Snake(player_id=SHARED_SNAKE_ID, cells=cells, heading="RIGHT", alive=True)
 
 
 def _occupied_cells_locked() -> set[tuple[int, int]]:
-    """Return all board cells currently occupied by alive snakes or food."""
+    """Return all board cells currently occupied by the shared snake or food."""
     occupied: set[tuple[int, int]] = set()
-    for snake in _room.snakes_by_id.values():
-        if snake.alive:
-            occupied.update(snake.cells)
+    if _room.shared_snake is not None and _room.shared_snake.alive:
+        occupied.update(_room.shared_snake.cells)
     occupied.update(_room.food)
     return occupied
 
@@ -139,23 +127,21 @@ def _spawn_food_locked(target_count: int) -> None:
 
 
 def _start_game_locked() -> None:
-    """Transition the room from lobby to running once required players join."""
+    """Transition the room from lobby to running once all N players join."""
     assert _room.num_players is not None
     _room.phase = "running"
     _room.tick = 0
     _room.winner = None
     _room.food = []
-    _room.snakes_by_id = {}
+    _room.pending_dir = None
+    _room.shared_snake = _build_shared_snake()
 
-    for player in sorted(_room.players_by_token.values(), key=lambda p: p.slot):
+    ordered_players = sorted(_room.players_by_token.values(), key=lambda p: p.slot)
+    _room.last_steer_player_id = ordered_players[0].player_id if ordered_players else None
+
+    for player in ordered_players:
         player.alive = True
         player.score = 0
-        player.pending_dir = None
-        _room.snakes_by_id[player.player_id] = _build_initial_snake(
-            player_id=player.player_id,
-            slot=player.slot,
-            num_players=_room.num_players,
-        )
 
     food_target = max(1, _room.num_players)
     _spawn_food_locked(food_target)
@@ -183,7 +169,7 @@ def _require_player_locked(token: str | None) -> Player:
 
 
 def join_player(name: str, num_players: int | None) -> dict[str, Any]:
-    """Join the room and return player credentials and assigned keys."""
+    """Join the cooperative room and return credentials plus assigned arrow keys."""
     cleaned_name = name.strip()
     if not cleaned_name:
         cleaned_name = "Player"
@@ -228,142 +214,101 @@ def join_player(name: str, num_players: int | None) -> dict[str, Any]:
 
 
 def submit_input(token: str | None, key: str) -> dict[str, Any]:
-    """Validate token and arrow ownership, queuing a valid direction for next tick."""
+    """Validate token and arrow ownership, queuing direction for the shared snake."""
     if not isinstance(key, str) or key not in config.VALID_KEYS:
         raise GameError(400, "Invalid or unsupported key.")
 
     with _room_lock:
         player = _require_player_locked(token)
-        if _room.phase != "running" or _room.num_players is None:
+        if _room.phase != "running" or _room.num_players is None or _room.shared_snake is None:
             raise GameError(409, "Game is not currently running.")
-        if not player.alive:
-            raise GameError(409, "Eliminated players cannot send movement inputs.")
+        if not player.alive or not _room.shared_snake.alive:
+            raise GameError(409, "Game has already ended.")
 
         slot_keys = config.KEY_OWNERSHIP[_room.num_players][player.slot]
         if key not in slot_keys:
             raise GameError(403, f"Key '{key}' is not assigned to player slot {player.slot}.")
 
-        snake = _room.snakes_by_id.get(player.player_id)
-        if snake is None or not snake.alive:
-            raise GameError(409, "Snake is no longer active.")
-
         action = slot_keys[key]
-        candidate_dir = _resolve_desired_direction(snake.heading, action, _room.num_players)
+        candidate_dir = _resolve_desired_direction(
+            _room.shared_snake.heading, action, _room.num_players
+        )
 
-        # In single-player mode, ignore a 180-degree reversal into the neck.
-        if _room.num_players == 1 and OPPOSITE_DIR[snake.heading] == candidate_dir:
+        # Prevent reversing directly into the snake's own neck.
+        if OPPOSITE_DIR[_room.shared_snake.heading] == candidate_dir:
             return {"ok": True}
 
-        player.pending_dir = candidate_dir
+        _room.pending_dir = candidate_dir
+        _room.last_steer_player_id = player.player_id
         return {"ok": True}
 
 
 def step_tick() -> None:
-    """Advance the simulation by one tick if the game is running."""
+    """Advance the cooperative shared snake by one tick if running."""
     with _room_lock:
-        if _room.phase != "running" or _room.num_players is None:
+        if _room.phase != "running" or _room.num_players is None or _room.shared_snake is None:
+            return
+
+        snake = _room.shared_snake
+        if not snake.alive:
             return
 
         _room.tick += 1
-        alive_players = [p for p in _room.players_by_token.values() if p.alive]
 
-        # Step 1: Apply queued inputs and compute proposed next head positions.
-        proposed_heads: dict[str, tuple[int, int]] = {}
-        for player in alive_players:
-            snake = _room.snakes_by_id[player.player_id]
-            if player.pending_dir is not None:
-                if not (_room.num_players == 1 and OPPOSITE_DIR[snake.heading] == player.pending_dir):
-                    snake.heading = player.pending_dir
-                player.pending_dir = None
+        if _room.pending_dir is not None:
+            if OPPOSITE_DIR[snake.heading] != _room.pending_dir:
+                snake.heading = _room.pending_dir
+            _room.pending_dir = None
 
-            hx, hy = snake.cells[0]
-            dx, dy = DIR_VECTORS[snake.heading]
-            proposed_heads[player.player_id] = (hx + dx, hy + dy)
+        hx, hy = snake.cells[0]
+        dx, dy = DIR_VECTORS[snake.heading]
+        nx, ny = hx + dx, hy + dy
 
-        # Step 2: Check wall collisions and food consumption.
-        food_set = set(_room.food)
-        eaten_food: set[tuple[int, int]] = set()
-        wall_dead: set[str] = set()
+        # Wall collision check.
+        if nx < 0 or nx >= config.GRID_WIDTH or ny < 0 or ny >= config.GRID_HEIGHT:
+            snake.alive = False
+            snake.cells = []
+            for p in _room.players_by_token.values():
+                p.alive = False
+            _room.phase = "finished"
+            _room.winner = None
+            return
 
-        for player in alive_players:
-            pid = player.player_id
-            nx, ny = proposed_heads[pid]
-            if nx < 0 or nx >= config.GRID_WIDTH or ny < 0 or ny >= config.GRID_HEIGHT:
-                wall_dead.add(pid)
-            elif (nx, ny) in food_set:
-                eaten_food.add((nx, ny))
-
-        # Step 3: Build occupancy map after tail movement (unless growing).
-        next_bodies: dict[str, list[tuple[int, int]]] = {}
-        for player in alive_players:
-            pid = player.player_id
-            snake = _room.snakes_by_id[pid]
-            if pid in wall_dead:
-                continue
-            nx, ny = proposed_heads[pid]
-            will_eat = (nx, ny) in eaten_food
-            if will_eat:
-                body = [proposed_heads[pid]] + list(snake.cells)
-            elif snake.grow_pending > 0:
-                body = [proposed_heads[pid]] + list(snake.cells)
-                snake.grow_pending -= 1
-            else:
-                body = [proposed_heads[pid]] + list(snake.cells[:-1])
-            next_bodies[pid] = body
-
-        # Step 4: Detect head-to-head and body collisions.
-        body_dead: set[str] = set()
-        alive_ids = [p.player_id for p in alive_players if p.player_id not in wall_dead]
-
-        for pid in alive_ids:
-            head = next_bodies[pid][0]
-            # Self collision (head matches any later segment of own next body).
-            if head in next_bodies[pid][1:]:
-                body_dead.add(pid)
-                continue
-            # Collision with another alive snake (head-to-head or head-to-body).
-            for other_id in alive_ids:
-                if other_id == pid:
-                    continue
-                if head in next_bodies[other_id]:
-                    body_dead.add(pid)
-                    break
-
-        newly_dead = wall_dead | body_dead
-
-        # Step 5: Apply deaths, remove dead snakes from board, and award food points.
-        for player in alive_players:
-            pid = player.player_id
-            snake = _room.snakes_by_id[pid]
-            if pid in newly_dead:
-                player.alive = False
-                snake.alive = False
-                snake.cells = []
-            else:
-                snake.cells = next_bodies[pid]
-                head = snake.cells[0]
-                if head in eaten_food:
-                    player.score += 1
-                    snake.grow_pending += 1
-
-        if eaten_food:
-            _room.food = [pt for pt in _room.food if pt not in eaten_food]
-            _spawn_food_locked(max(1, _room.num_players))
-
-        # Step 6: Evaluate end-of-game condition.
-        remaining = [p for p in _room.players_by_token.values() if p.alive]
-        if _room.num_players == 1:
-            if len(remaining) == 0:
-                _room.phase = "finished"
-                _room.winner = None
+        will_eat = (nx, ny) in _room.food
+        if will_eat:
+            next_cells = [(nx, ny)] + list(snake.cells)
+        elif snake.grow_pending > 0:
+            next_cells = [(nx, ny)] + list(snake.cells)
+            snake.grow_pending -= 1
         else:
-            if len(remaining) <= 1:
-                _room.phase = "finished"
-                _room.winner = remaining[0].player_id if len(remaining) == 1 else None
+            next_cells = [(nx, ny)] + list(snake.cells[:-1])
+
+        # Self-collision check against remaining body segments.
+        if (nx, ny) in next_cells[1:]:
+            snake.alive = False
+            snake.cells = []
+            for p in _room.players_by_token.values():
+                p.alive = False
+            _room.phase = "finished"
+            _room.winner = None
+            return
+
+        snake.cells = next_cells
+
+        if will_eat:
+            _room.food = [pt for pt in _room.food if pt != (nx, ny)]
+            scorer = next(
+                (p for p in _room.players_by_token.values() if p.player_id == _room.last_steer_player_id),
+                None,
+            )
+            if scorer is not None:
+                scorer.score += 1
+            snake.grow_pending += 1
+            _spawn_food_locked(max(1, _room.num_players))
 
 
 def reset_room(token: str | None) -> dict[str, Any]:
-    """Reset the room back to lobby after a finished game."""
+    """Reset the cooperative room back to lobby after a finished game."""
     with _room_lock:
         _require_player_locked(token)
         if _room.phase != "finished":
@@ -373,7 +318,9 @@ def reset_room(token: str | None) -> dict[str, Any]:
         _room.num_players = None
         _room.tick = 0
         _room.players_by_token.clear()
-        _room.snakes_by_id.clear()
+        _room.shared_snake = None
+        _room.pending_dir = None
+        _room.last_steer_player_id = None
         _room.food.clear()
         _room.winner = None
         return {"ok": True, "phase": "lobby"}
@@ -403,15 +350,15 @@ def get_state(token: str | None) -> dict[str, Any]:
             for p in sorted(_room.players_by_token.values(), key=lambda item: item.slot)
         ]
 
-        snakes_payload = [
-            {
-                "player_id": s.player_id,
-                "cells": [[x, y] for x, y in s.cells],
-                "alive": s.alive,
-            }
-            for s in _room.snakes_by_id.values()
-            if s.alive
-        ]
+        snakes_payload: list[dict[str, Any]] = []
+        if _room.shared_snake is not None and _room.shared_snake.alive:
+            snakes_payload.append(
+                {
+                    "player_id": _room.shared_snake.player_id,
+                    "cells": [[x, y] for x, y in _room.shared_snake.cells],
+                    "alive": _room.shared_snake.alive,
+                }
+            )
 
         food_payload = [[x, y] for x, y in _room.food]
 

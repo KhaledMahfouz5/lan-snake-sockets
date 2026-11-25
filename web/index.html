@@ -3,13 +3,13 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>NOKIA LAN SNAKE</title>
+  <title>NOKIA LAN SNAKE — CO-OP</title>
   <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
   <main class="device-shell">
     <header class="lcd-header">
-      <h1 class="lcd-title">SNAKE // LAN</h1>
+      <h1 class="lcd-title">SNAKE // CO-OP LAN</h1>
       <div id="status-badge" class="status-pill">LOBBY</div>
     </header>
 
@@ -34,20 +34,24 @@
         >
 
         <div id="num-players-group" class="field-group">
-          <label for="num-players" class="field-label">PLAYERS IN ROOM (1-4)</label>
+          <label for="num-players" class="field-label">CO-OP PLAYERS IN ROOM (1-4)</label>
           <select id="num-players" name="num_players">
             <option value="1">1 Player (Solo)</option>
-            <option value="2" selected>2 Players</option>
-            <option value="3">3 Players</option>
-            <option value="4">4 Players</option>
+            <option value="2" selected>2 Players (Co-op)</option>
+            <option value="3">3 Players (Co-op)</option>
+            <option value="4">4 Players (Co-op)</option>
           </select>
         </div>
 
-        <button id="join-btn" type="submit" class="btn btn-primary">JOIN ROOM</button>
+        <button id="join-btn" type="submit" class="btn btn-primary">JOIN CO-OP ROOM</button>
       </form>
 
       <div id="waiting-box" class="waiting-box hidden">
         <p id="waiting-text" class="waiting-text">WAITING FOR PLAYERS 0/0</p>
+        <div class="pregame-keys-block">
+          <p class="field-label">YOUR ASSIGNED ARROWS (BEFORE START):</p>
+          <div id="lobby-owned-keys" class="owned-keys-box"></div>
+        </div>
         <ul id="lobby-players" class="simple-list"></ul>
       </div>
     </section>
@@ -60,6 +64,7 @@
           <div class="controls-bar">
             <div class="control-meta">
               <span>SLOT: <strong id="your-slot">-</strong></span>
+              <span>MODE: <strong>SHARED CO-OP SNAKE</strong></span>
               <span>TICK: <strong id="tick-counter">0</strong></span>
             </div>
             <div id="owned-keys-box" class="owned-keys-box"></div>
@@ -67,7 +72,7 @@
         </div>
 
         <aside class="sidebar-column">
-          <h2 class="section-heading">SCOREBOARD</h2>
+          <h2 class="section-heading">CO-OP TEAM</h2>
           <ul id="scoreboard-list" class="scoreboard-list"></ul>
         </aside>
       </div>

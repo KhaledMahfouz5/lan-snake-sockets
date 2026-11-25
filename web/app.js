@@ -3,7 +3,6 @@
 const POLL_INTERVAL_MS = 120;
 const REQUEST_TIMEOUT_MS = 1000;
 
-// Monochrome LCD shades and distinct hatch patterns per slot.
 const SLOT_STYLES = {
   1: { label: "P1", fill: "#0f380f", pattern: "solid" },
   2: { label: "P2", fill: "#306230", pattern: "stripes" },
@@ -43,6 +42,7 @@ const els = {
   joinBtn: document.getElementById("join-btn"),
   waitingBox: document.getElementById("waiting-box"),
   waitingText: document.getElementById("waiting-text"),
+  lobbyOwnedKeys: document.getElementById("lobby-owned-keys"),
   lobbyPlayers: document.getElementById("lobby-players"),
   gamePanel: document.getElementById("game-panel"),
   canvas: document.getElementById("game-canvas"),
@@ -111,18 +111,17 @@ function describeOwnedKey(key, numPlayers) {
     }
     return `${arrowName} -> TURN RIGHT (CW)`;
   }
-  // N === 4: each assigned arrow turns clockwise 90 deg.
   return `${arrowName} -> TURN RIGHT (CW)`;
 }
 
-function renderOwnedKeys() {
-  els.ownedKeysBox.innerHTML = "";
+function renderKeyChipsInto(container) {
+  container.innerHTML = "";
   const count = state.numPlayers || 1;
   if (!state.ownedKeys || state.ownedKeys.length === 0) {
     const span = document.createElement("span");
     span.className = "key-chip";
-    span.textContent = "NO ASSIGNED KEYS";
-    els.ownedKeysBox.appendChild(span);
+    span.textContent = "JOIN ROOM TO SEE ASSIGNED ARROWS";
+    container.appendChild(span);
     return;
   }
 
@@ -133,8 +132,13 @@ function renderOwnedKeys() {
       chip.classList.add("active-key");
     }
     chip.textContent = describeOwnedKey(key, count);
-    els.ownedKeysBox.appendChild(chip);
+    container.appendChild(chip);
   }
+}
+
+function renderOwnedKeys() {
+  renderKeyChipsInto(els.ownedKeysBox);
+  renderKeyChipsInto(els.lobbyOwnedKeys);
 }
 
 function inferSlotFromPlayerId(playerId) {
@@ -177,11 +181,9 @@ function drawBoard(gameState) {
   const cellW = els.canvas.width / gridW;
   const cellH = els.canvas.height / gridH;
 
-  // Clear LCD background.
   ctx.fillStyle = "#9bbc0f";
   ctx.fillRect(0, 0, els.canvas.width, els.canvas.height);
 
-  // Subtle Nokia pixel grid lines.
   ctx.strokeStyle = "#8bac0f";
   ctx.lineWidth = 1;
   for (let x = 0; x <= gridW; x += 1) {
@@ -203,7 +205,6 @@ function drawBoard(gameState) {
     return;
   }
 
-  // Draw food items as crisp Nokia pips.
   const foods = Array.isArray(gameState.food) ? gameState.food : [];
   for (const item of foods) {
     if (!Array.isArray(item) || item.length < 2) {
@@ -221,13 +222,12 @@ function drawBoard(gameState) {
     );
   }
 
-  // Draw active snakes.
   const snakes = Array.isArray(gameState.snakes) ? gameState.snakes : [];
   for (const snake of snakes) {
     if (!snake || !snake.alive || !Array.isArray(snake.cells)) {
       continue;
     }
-    const slotNum = inferSlotFromPlayerId(snake.player_id);
+    const slotNum = state.slot || 1;
     const styleCfg = SLOT_STYLES[slotNum] || SLOT_STYLES[1];
     const patCanvas = makePatternCanvas(styleCfg.pattern, styleCfg.fill);
     const pattern = ctx.createPattern(patCanvas, "repeat");
@@ -295,7 +295,6 @@ function renderLobby(gameState) {
   const joined = gameState ? gameState.joined : 0;
   const needed = gameState ? gameState.needed : null;
 
-  // Show player-count selector only when room has no joined players yet.
   if (!state.token && (!needed || joined === 0)) {
     els.numPlayersGroup.classList.remove("hidden");
   } else {
@@ -307,13 +306,15 @@ function renderLobby(gameState) {
     els.playerNameInput.disabled = true;
     els.waitingBox.classList.remove("hidden");
     const targetDisplay = needed !== null && needed !== undefined ? needed : "?";
-    els.waitingText.textContent = `WAITING FOR PLAYERS ${joined}/${targetDisplay}`;
+    els.waitingText.textContent = `WAITING FOR PLAYERS ${joined}/${targetDisplay} — SHARED SNAKE`;
+    renderKeyChipsInto(els.lobbyOwnedKeys);
   } else {
     els.joinBtn.disabled = false;
     els.playerNameInput.disabled = false;
     if (joined > 0 && needed) {
       els.waitingBox.classList.remove("hidden");
       els.waitingText.textContent = `WAITING FOR PLAYERS ${joined}/${needed} (ROOM ACTIVE)`;
+      els.lobbyOwnedKeys.innerHTML = "";
     } else {
       els.waitingBox.classList.add("hidden");
     }
@@ -322,35 +323,27 @@ function renderLobby(gameState) {
   els.lobbyPlayers.innerHTML = "";
   const players = gameState && Array.isArray(gameState.players) ? gameState.players : [];
   for (const p of players) {
+    const slotNum = inferSlotFromPlayerId(p.id);
     const li = document.createElement("li");
-    li.textContent = `${p.name} (${p.id})`;
+    li.textContent = `${p.name} (Slot ${slotNum})`;
     els.lobbyPlayers.appendChild(li);
   }
 }
 
 function renderGameOver(gameState) {
   els.gameoverOverlay.classList.remove("hidden");
-  const winnerId = gameState.winner;
   const players = Array.isArray(gameState.players) ? gameState.players : [];
-  const winnerPlayer = players.find((p) => p.id === winnerId);
-
-  if (winnerPlayer) {
-    const isYou = winnerPlayer.id === state.playerId;
-    els.winnerText.textContent = isYou
-      ? `WINNER: ${winnerPlayer.name} (YOU!)`
-      : `WINNER: ${winnerPlayer.name}`;
-  } else {
-    els.winnerText.textContent = "RESULT: DRAW / ROUND ENDED";
-  }
+  const teamScore = players.reduce((sum, p) => sum + (Number(p.score) || 0), 0);
+  els.winnerText.textContent = `CO-OP SNAKE CRASHED — TEAM SCORE: ${teamScore} PTS`;
 
   els.finalScores.innerHTML = "";
   for (const p of players) {
+    const pts = Number(p.score) || 0;
     const li = document.createElement("li");
-    li.textContent = `${p.name}: ${p.score} pts (${p.alive ? "Alive" : "Eliminated"})`;
+    li.textContent = `${p.name}: ${pts} pts`;
     els.finalScores.appendChild(li);
   }
 
-  // Only a player who joined with a token can trigger POST /api/reset.
   els.resetBtn.disabled = !state.token;
 }
 
@@ -396,7 +389,6 @@ function applyGameState(gameState) {
 }
 
 async function pollStateOnce() {
-  // Never stack overlapping polling requests.
   if (state.pollInFlight) {
     return;
   }
@@ -408,7 +400,6 @@ async function pollStateOnce() {
 
     if (!res.ok) {
       if (res.status === 401 && state.token) {
-        // Room was reset or token became invalid.
         state.token = null;
         state.playerId = null;
         state.slot = null;
@@ -477,11 +468,7 @@ async function handleJoinSubmit(event) {
 }
 
 async function sendArrowInput(key) {
-  if (!state.token) {
-    return;
-  }
-  // Browser enforces sending only keys owned by this player.
-  if (!state.ownedKeys.includes(key)) {
+  if (!state.token || !state.ownedKeys.includes(key)) {
     return;
   }
 

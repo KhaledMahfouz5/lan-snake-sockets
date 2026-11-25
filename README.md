@@ -21,13 +21,13 @@ Authors: <STUDENT_1>, <STUDENT_2>. Course: <COURSE_NAME>. Instructor: <INSTRUCTO
 2. Start the server:
 
 ```bash
-python server/main.py
+python3 -m server.main
 ```
 
 Optional flags:
 
 ```bash
-python server/main.py --port 8080 --host 0.0.0.0
+python3 -m server.main --port 8080 --host 0.0.0.0
 ```
 
 3. Open the printed URL (`http://<server-ip>:8080/`) in **1 to 4 browsers or devices** connected to the same local network (LAN).
